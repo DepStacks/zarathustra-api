@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Zarathustra API - AI Agent Gateway that receives prompts from third-party apps
+  (Slack, Telegram, Jira, etc.) and publishes to SQS for processing.
+
+Parameters:
+  ApiKeyName:
+    Type: String
+    Description: Name for the API Key
+    Default: zarathustra-api-key
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 256
+    Runtime: python3.12
+    Environment:
+      Variables:
+        SQS_QUEUE_URL: !Ref AgentRequestQueue
+
+Resources:
+  # SQS Queue for AI Agent requests
+  AgentRequestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: zarathustra-agent-requests
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600  # 14 days
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt AgentRequestDLQ.Arn
+        maxReceiveCount: 3
+
+  # Dead Letter Queue for failed messages
+  AgentRequestDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: zarathustra-agent-requests-dlq
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  # Lambda function to receive prompts and publish to SQS
+  PromptHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: zarathustra-prompt-handler
+      CodeUri: ./
+      Handler: handlers.prompt_handler.handle_prompt
+      Description: Receives AI agent prompts and publishes to SQS queue
+      Events:
+        PromptApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ZarathustraApi
+            Path: /prompt
+            Method: post
+            Auth:
+              ApiKeyRequired: true
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt AgentRequestQueue.Arn
+
+  # Health check endpoint (no auth required)
+  HealthCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: zarathustra-health-check
+      CodeUri: ./
+      Handler: handlers.health_handler.health_check
+      Description: Health check endpoint
+      Events:
+        HealthApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ZarathustraApi
+            Path: /health
+            Method: get
+
+  # API Gateway
+  ZarathustraApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: zarathustra-api
+      StageName: api
+      Auth:
+        ApiKeyRequired: false
+      Cors:
+        AllowMethods: "'GET, POST, OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+
+  # Usage Plan for API Gateway
+  ZarathustraApiUsagePlan:
+    Type: AWS::ApiGateway::UsagePlan
+    DependsOn: ZarathustraApiapiStage
+    Properties:
+      UsagePlanName: !Sub "${AWS::StackName}-usage-plan"
+      Description: Usage plan for Zarathustra API
+      ApiStages:
+        - ApiId: !Ref ZarathustraApi
+          Stage: api
+      Quota:
+        Limit: 10000
+        Period: DAY
+      Throttle:
+        BurstLimit: 100
+        RateLimit: 50
+
+  # API Key for authentication
+  ZarathustraApiKey:
+    Type: AWS::ApiGateway::ApiKey
+    Properties:
+      Name: !Ref ApiKeyName
+      Description: API Key for Zarathustra API
+      Enabled: true
+
+  # Usage Plan Key to associate API Key with Usage Plan
+  ZarathustraUsagePlanKey:
+    Type: AWS::ApiGateway::UsagePlanKey
+    Properties:
+      KeyId: !Ref ZarathustraApiKey
+      KeyType: API_KEY
+      UsagePlanId: !Ref ZarathustraApiUsagePlan
+
+Outputs:
+  ZarathustraApiUrl:
+    Description: API Gateway endpoint URL
+    Value: !Sub "https://${ZarathustraApi}.execute-api.${AWS::Region}.amazonaws.com/api"
+    Export:
+      Name: !Sub "${AWS::StackName}-api-url"
+
+  PromptEndpoint:
+    Description: Prompt endpoint URL
+    Value: !Sub "https://${ZarathustraApi}.execute-api.${AWS::Region}.amazonaws.com/api/prompt"
+    Export:
+      Name: !Sub "${AWS::StackName}-prompt-url"
+
+  HealthEndpoint:
+    Description: Health check endpoint URL
+    Value: !Sub "https://${ZarathustraApi}.execute-api.${AWS::Region}.amazonaws.com/api/health"
+    Export:
+      Name: !Sub "${AWS::StackName}-health-url"
+
+  ZarathustraApiKeyId:
+    Description: API Key ID for Zarathustra API
+    Value: !Ref ZarathustraApiKey
+    Export:
+      Name: !Sub "${AWS::StackName}-api-key-id"
+
+  AgentRequestQueueUrl:
+    Description: SQS Queue URL for agent requests
+    Value: !Ref AgentRequestQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-queue-url"
+
+  AgentRequestQueueArn:
+    Description: SQS Queue ARN for agent requests
+    Value: !GetAtt AgentRequestQueue.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-queue-arn"
+
+  DeadLetterQueueUrl:
+    Description: Dead Letter Queue URL
+    Value: !Ref AgentRequestDLQ
+    Export:
+      Name: !Sub "${AWS::StackName}-dlq-url"
