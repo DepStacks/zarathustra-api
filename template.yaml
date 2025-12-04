@@ -9,6 +9,11 @@ Parameters:
     Type: String
     Description: Name for the API Key
     Default: zarathustra-api-key
+  SlackSigningSecret:
+    Type: String
+    Description: Slack App Signing Secret for request verification
+    Default: ''
+    NoEcho: true
 
 Globals:
   Function:
@@ -55,6 +60,33 @@ Resources:
             Method: post
             Auth:
               ApiKeyRequired: true
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+              Resource: !GetAtt AgentRequestQueue.Arn
+
+  # Slack Events API endpoint (no API key - Slack uses signing secret)
+  SlackHandlerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: zarathustra-slack-handler
+      CodeUri: ./
+      Handler: handlers.slack_handler.handle_slack_event
+      Description: Receives Slack Events API webhooks and publishes to SQS queue
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Ref AgentRequestQueue
+          SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
+      Events:
+        SlackApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ZarathustraApi
+            Path: /slack/events
+            Method: post
       Policies:
         - Version: '2012-10-17'
           Statement:
@@ -167,3 +199,9 @@ Outputs:
     Value: !Ref AgentRequestDLQ
     Export:
       Name: !Sub "${AWS::StackName}-dlq-url"
+
+  SlackEndpoint:
+    Description: Slack Events API endpoint URL
+    Value: !Sub "https://${ZarathustraApi}.execute-api.${AWS::Region}.amazonaws.com/api/slack/events"
+    Export:
+      Name: !Sub "${AWS::StackName}-slack-url"

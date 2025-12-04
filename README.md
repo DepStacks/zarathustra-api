@@ -25,6 +25,7 @@ AI Agent Gateway API that receives prompts from third-party applications (Slack,
 zarathustra-api/
 ├── handlers/               # Lambda functions
 │   ├── prompt_handler.py   # Main prompt endpoint
+│   ├── slack_handler.py    # Slack Events API endpoint
 │   └── health_handler.py   # Health check endpoint
 ├── models/                 # Pydantic schemas
 │   └── schemas.py
@@ -78,6 +79,54 @@ Receives a prompt and publishes it to SQS for AI agent processing.
     "status": "queued"
   },
   "message": "Prompt successfully queued for processing"
+}
+```
+
+### POST /slack/events (Slack Events API)
+
+Receives Slack Events API webhooks. No API key required - uses Slack's signing secret for verification.
+
+**Supported Events:**
+- `message` - Direct messages or channel messages
+- `app_mention` - When the bot is @mentioned
+
+**Slack Event Payload:**
+```json
+{
+  "type": "event_callback",
+  "team_id": "T123456",
+  "event": {
+    "type": "app_mention",
+    "user": "U123456",
+    "text": "<@UBOT123> What is the weather?",
+    "channel": "C789012",
+    "ts": "1234567890.123456"
+  }
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "data": {
+    "message_id": "550e8400-e29b-41d4-a716-446655440000",
+    "status": "queued"
+  },
+  "message": "Message queued for processing"
+}
+```
+
+**SQS Message Metadata (from Slack):**
+```json
+{
+  "slack_team_id": "T123456",
+  "slack_channel": "C789012",
+  "slack_user": "U123456",
+  "slack_ts": "1234567890.123456",
+  "slack_event_type": "app_mention",
+  "slack_channel_type": "channel",
+  "slack_thread_ts": null
 }
 ```
 
@@ -211,6 +260,7 @@ curl -X POST https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/api/prompt 
 |----------|------|-------------|
 | API Gateway | zarathustra-api | REST API with API Key auth |
 | Lambda | zarathustra-prompt-handler | Receives prompts and publishes to SQS |
+| Lambda | zarathustra-slack-handler | Handles Slack Events API webhooks |
 | Lambda | zarathustra-health-check | Health check endpoint |
 | SQS Queue | zarathustra-agent-requests | Main queue for AI agent requests |
 | SQS DLQ | zarathustra-agent-requests-dlq | Dead letter queue for failed messages |
@@ -242,6 +292,42 @@ curl -X POST https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/api/prompt 
 - **Daily Quota**: 10,000 requests
 - **Rate Limit**: 50 requests/second
 - **Burst Limit**: 100 requests
+
+## Slack App Setup
+
+To integrate with Slack:
+
+### 1. Create a Slack App
+1. Go to [api.slack.com/apps](https://api.slack.com/apps)
+2. Click "Create New App" → "From scratch"
+3. Name your app and select a workspace
+
+### 2. Configure Event Subscriptions
+1. Navigate to "Event Subscriptions"
+2. Enable Events
+3. Set Request URL to: `https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/api/slack/events`
+4. Subscribe to bot events:
+   - `app_mention` - When someone @mentions your bot
+   - `message.im` - Direct messages to your bot
+
+### 3. Set Signing Secret
+1. Go to "Basic Information" → "App Credentials"
+2. Copy the "Signing Secret"
+3. Deploy with the signing secret:
+```bash
+sam deploy --parameter-overrides SlackSigningSecret=your_signing_secret --profile depstacks
+```
+
+### 4. Install App to Workspace
+1. Go to "OAuth & Permissions"
+2. Add Bot Token Scopes:
+   - `app_mentions:read`
+   - `chat:write`
+   - `im:history`
+3. Install App to Workspace
+
+### 5. Test Integration
+Mention your bot in a channel: `@YourBot What is the weather?`
 
 ## License
 

@@ -79,6 +79,15 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 3. Add Lambda function in `template.yaml`
 4. Update `README.md` with endpoint documentation
 
+## Third-Party Integrations
+
+### Slack Integration
+- Handler: `handlers/slack_handler.py`
+- Endpoint: `POST /slack/events`
+- Auth: Slack Signing Secret (not API Key)
+- Events: `message`, `app_mention`
+- The handler extracts message text and publishes to SQS with Slack metadata
+
 ## Testing
 
 ```bash
