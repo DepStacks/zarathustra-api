@@ -10,7 +10,16 @@ from models.schemas import PromptRequest, SqsMessage
 from utils.response import create_response, handle_error
 
 
-sqs_client = boto3.client('sqs')
+# Lazy initialization of SQS client
+_sqs_client = None
+
+
+def get_sqs_client():
+    """Get or create SQS client with lazy initialization."""
+    global _sqs_client
+    if _sqs_client is None:
+        _sqs_client = boto3.client('sqs')
+    return _sqs_client
 
 
 def handle_prompt(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
@@ -68,7 +77,7 @@ def handle_prompt(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             )
         
         # Send message to SQS
-        response = sqs_client.send_message(
+        response = get_sqs_client().send_message(
             QueueUrl=queue_url,
             MessageBody=json.dumps(sqs_message.model_dump(), default=str),
             MessageAttributes={
