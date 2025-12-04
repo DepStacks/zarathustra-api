@@ -162,10 +162,8 @@ sam deploy --profile depstacks
 
 The project includes GitHub Actions workflow that deploys automatically on push to `main`.
 
-**Required GitHub Secrets:**
-- `AWS_ROLE_ARN`: IAM role ARN for OIDC authentication
-
 **Required GitHub Variables:**
+- `AWS_ROLE_ARN`: IAM role ARN for OIDC authentication
 - `AWS_REGION`: AWS region (default: us-east-1)
 
 ### Get API Key
