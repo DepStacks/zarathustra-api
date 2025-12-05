@@ -82,6 +82,41 @@ Receives a prompt and publishes it to SQS for AI agent processing.
 }
 ```
 
+### POST /slack/command (Slack Slash Commands)
+
+Receives Slack Slash Command requests (e.g., `/zara`). No API key required - uses Slack's signing secret.
+
+**Usage:**
+```
+/zara <your message>
+/zara create a secret called my-api-key
+```
+
+**Slack Slash Command Payload (form-urlencoded):**
+```
+command=/zara&text=create+a+secret&user_id=U123&channel_id=C456&response_url=https://...
+```
+
+**Response (200 OK):**
+```json
+{
+  "response_type": "in_channel",
+  "text": ":hourglass_flowing_sand: Processing your request...\n> create a secret"
+}
+```
+
+**SQS Message Metadata (from Slash Command):**
+```json
+{
+  "slack_team_id": "T123456",
+  "slack_channel": "C789012",
+  "slack_user": "U123456",
+  "slack_command": "/zara",
+  "slack_response_url": "https://hooks.slack.com/...",
+  "slack_event_type": "slash_command"
+}
+```
+
 ### POST /slack/events (Slack Events API)
 
 Receives Slack Events API webhooks. No API key required - uses Slack's signing secret for verification.
@@ -114,19 +149,6 @@ Receives Slack Events API webhooks. No API key required - uses Slack's signing s
     "status": "queued"
   },
   "message": "Message queued for processing"
-}
-```
-
-**SQS Message Metadata (from Slack):**
-```json
-{
-  "slack_team_id": "T123456",
-  "slack_channel": "C789012",
-  "slack_user": "U123456",
-  "slack_ts": "1234567890.123456",
-  "slack_event_type": "app_mention",
-  "slack_channel_type": "channel",
-  "slack_thread_ts": null
 }
 ```
 
@@ -300,9 +322,19 @@ To integrate with Slack:
 ### 1. Create a Slack App
 1. Go to [api.slack.com/apps](https://api.slack.com/apps)
 2. Click "Create New App" → "From scratch"
-3. Name your app and select a workspace
+3. Name your app (e.g., "Zarathustra") and select a workspace
 
-### 2. Configure Event Subscriptions
+### 2. Configure Slash Commands
+1. Navigate to "Slash Commands"
+2. Click "Create New Command"
+3. Configure:
+   - **Command**: `/zara`
+   - **Request URL**: `https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/api/slack/command`
+   - **Short Description**: "AI Agent for AWS operations"
+   - **Usage Hint**: `<your request>`
+4. Save
+
+### 3. Configure Event Subscriptions (Optional)
 1. Navigate to "Event Subscriptions"
 2. Enable Events
 3. Set Request URL to: `https://YOUR_API_ID.execute-api.us-east-1.amazonaws.com/api/slack/events`
@@ -310,7 +342,7 @@ To integrate with Slack:
    - `app_mention` - When someone @mentions your bot
    - `message.im` - Direct messages to your bot
 
-### 3. Set Signing Secret
+### 4. Set Signing Secret
 1. Go to "Basic Information" → "App Credentials"
 2. Copy the "Signing Secret"
 3. Deploy with the signing secret:
@@ -318,16 +350,20 @@ To integrate with Slack:
 sam deploy --parameter-overrides SlackSigningSecret=your_signing_secret --profile depstacks
 ```
 
-### 4. Install App to Workspace
+### 5. Install App to Workspace
 1. Go to "OAuth & Permissions"
 2. Add Bot Token Scopes:
-   - `app_mentions:read`
-   - `chat:write`
-   - `im:history`
+   - `commands` - For slash commands
+   - `chat:write` - To send messages
+   - `app_mentions:read` (optional)
+   - `im:history` (optional)
 3. Install App to Workspace
 
-### 5. Test Integration
-Mention your bot in a channel: `@YourBot What is the weather?`
+### 6. Test Integration
+Use the slash command in any channel:
+```
+/zara list all secrets in production
+```
 
 ## License
 

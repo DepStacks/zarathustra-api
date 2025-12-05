@@ -1,11 +1,16 @@
 """
-Slack Events API handler for Zarathustra API.
+Slack handler for Zarathustra API.
 
-Handles Slack Events API payloads including:
-- URL verification challenge (for app setup)
-- Message events (app_mention, message)
+Handles:
+1. Slack Slash Commands (e.g., /zara) - form-urlencoded payload
+2. Slack Events API - JSON payload
+   - URL verification challenge (for app setup)
+   - Message events (app_mention, message)
 
-Slack Events API payload format:
+Slash Command payload (form-urlencoded):
+- command=/zara, text=hello world, user_id=U123, channel_id=C456, response_url=...
+
+Events API payload (JSON):
 - URL Verification: {"type": "url_verification", "challenge": "...", "token": "..."}
 - Event Callback: {"type": "event_callback", "event": {"type": "message", "text": "...", ...}}
 """
@@ -18,6 +23,7 @@ import time
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs
 
 import boto3
 
@@ -89,21 +95,180 @@ def extract_message_text(event_data: Dict[str, Any]) -> Optional[str]:
     return text if text else None
 
 
+def is_slash_command(body: str) -> bool:
+    """Check if the request body is a slash command (form-urlencoded)."""
+    # Slash commands contain 'command=' in the body
+    return 'command=' in body and 'text=' in body
+
+
+def parse_slash_command(body: str) -> Dict[str, str]:
+    """Parse form-urlencoded slash command payload."""
+    parsed = parse_qs(body)
+    # parse_qs returns lists, extract first value
+    return {k: v[0] if v else '' for k, v in parsed.items()}
+
+
+def handle_slash_command(
+    command_data: Dict[str, str],
+    event: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Handle Slack slash command.
+    
+    Slash command payload fields:
+    - command: The slash command (e.g., /zara)
+    - text: Text after the command
+    - user_id: User who invoked the command
+    - user_name: Username
+    - channel_id: Channel where command was invoked
+    - channel_name: Channel name
+    - team_id: Team ID
+    - team_domain: Team domain
+    - response_url: URL for delayed responses
+    - trigger_id: For opening modals
+    """
+    command = command_data.get('command', '')
+    text = command_data.get('text', '').strip()
+    
+    if not text:
+        # Return immediate response for empty command
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
+                'response_type': 'ephemeral',
+                'text': f'Usage: `{command} <your message>`\nExample: `{command} create a secret called my-api-key`'
+            })
+        }
+    
+    # Build metadata from slash command
+    metadata = {
+        'slack_team_id': command_data.get('team_id'),
+        'slack_team_domain': command_data.get('team_domain'),
+        'slack_channel': command_data.get('channel_id'),
+        'slack_channel_name': command_data.get('channel_name'),
+        'slack_user': command_data.get('user_id'),
+        'slack_user_name': command_data.get('user_name'),
+        'slack_command': command,
+        'slack_response_url': command_data.get('response_url'),
+        'slack_trigger_id': command_data.get('trigger_id'),
+        'slack_event_type': 'slash_command',
+    }
+    
+    # Generate message ID
+    message_id = str(uuid.uuid4())
+    
+    # Build SQS message
+    sqs_message = SqsMessage(
+        message_id=message_id,
+        prompt=text,
+        source='slack',
+        callback_url=command_data.get('response_url'),  # Use response_url for callbacks
+        metadata=metadata,
+        timestamp=datetime.utcnow().isoformat()
+    )
+    
+    # Get queue URL
+    queue_url = os.environ.get('SQS_QUEUE_URL')
+    if not queue_url:
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
+                'response_type': 'ephemeral',
+                'text': ':x: Error: Service not configured properly. Please contact the administrator.'
+            })
+        }
+    
+    # Send to SQS
+    try:
+        response = get_sqs_client().send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps(sqs_message.model_dump(), default=str),
+            MessageAttributes={
+                'source': {
+                    'DataType': 'String',
+                    'StringValue': 'slack'
+                },
+                'message_id': {
+                    'DataType': 'String',
+                    'StringValue': message_id
+                },
+                'slack_channel': {
+                    'DataType': 'String',
+                    'StringValue': command_data.get('channel_id', 'unknown')
+                },
+                'slack_command': {
+                    'DataType': 'String',
+                    'StringValue': command
+                }
+            }
+        )
+        
+        print(f"Slack slash command queued: {message_id}, SQS: {response.get('MessageId')}")
+        
+        # Return immediate acknowledgment to Slack
+        # The actual response will be sent via response_url by the agent
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
+                'response_type': 'in_channel',
+                'text': f':hourglass_flowing_sand: Processing your request...\n> {text}'
+            })
+        }
+        
+    except Exception as e:
+        print(f"Error sending to SQS: {e}")
+        return {
+            'statusCode': 200,
+            'headers': {'Content-Type': 'application/json'},
+            'body': json.dumps({
+                'response_type': 'ephemeral',
+                'text': f':x: Error queuing request: {str(e)}'
+            })
+        }
+
+
 def handle_slack_event(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
-    Handle Slack Events API webhook.
+    Handle Slack requests (both slash commands and Events API).
     
-    Slack Events API payload types:
-    1. url_verification - Challenge request for app setup
-    2. event_callback - Actual event (message, app_mention, etc.)
-    
-    Supported event types:
-    - message: Direct message or channel message
-    - app_mention: When the bot is @mentioned
+    Supported request types:
+    1. Slash Commands (form-urlencoded) - /zara <message>
+    2. Events API (JSON):
+       - url_verification - Challenge request for app setup
+       - event_callback - message, app_mention events
     """
     try:
-        # Parse request body
-        body = event.get('body', '')
+        # Get raw body
+        raw_body = event.get('body', '')
+        
+        # Check if this is a slash command (form-urlencoded)
+        if isinstance(raw_body, str) and is_slash_command(raw_body):
+            print(f"Processing slash command")
+            
+            # Verify signature first
+            headers = event.get('headers', {})
+            slack_signature = headers.get('X-Slack-Signature') or headers.get('x-slack-signature', '')
+            slack_timestamp = headers.get('X-Slack-Request-Timestamp') or headers.get('x-slack-request-timestamp', '')
+            signing_secret = os.environ.get('SLACK_SIGNING_SECRET')
+            
+            if signing_secret and slack_signature and slack_timestamp:
+                if not verify_slack_signature(signing_secret, slack_timestamp, raw_body, slack_signature):
+                    print("Slack signature verification failed for slash command")
+                    return {
+                        'statusCode': 401,
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({'error': 'Invalid signature'})
+                    }
+            
+            # Parse and handle slash command
+            command_data = parse_slash_command(raw_body)
+            return handle_slash_command(command_data, event)
+        
+        # Parse JSON body for Events API
+        body = raw_body
         if isinstance(body, str):
             body_dict = json.loads(body)
         else:

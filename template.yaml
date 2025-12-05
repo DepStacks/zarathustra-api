@@ -68,24 +68,30 @@ Resources:
                 - sqs:SendMessage
               Resource: !GetAtt AgentRequestQueue.Arn
 
-  # Slack Events API endpoint (no API key - Slack uses signing secret)
+  # Slack handler (Events API + Slash Commands - uses signing secret)
   SlackHandlerFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: zarathustra-slack-handler
       CodeUri: ./
       Handler: handlers.slack_handler.handle_slack_event
-      Description: Receives Slack Events API webhooks and publishes to SQS queue
+      Description: Handles Slack Events API and Slash Commands
       Environment:
         Variables:
           SQS_QUEUE_URL: !Ref AgentRequestQueue
           SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
       Events:
-        SlackApi:
+        SlackEventsApi:
           Type: Api
           Properties:
             RestApiId: !Ref ZarathustraApi
             Path: /slack/events
+            Method: post
+        SlackCommandApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref ZarathustraApi
+            Path: /slack/command
             Method: post
       Policies:
         - Version: '2012-10-17'
@@ -200,8 +206,14 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-dlq-url"
 
-  SlackEndpoint:
+  SlackEventsEndpoint:
     Description: Slack Events API endpoint URL
     Value: !Sub "https://${ZarathustraApi}.execute-api.${AWS::Region}.amazonaws.com/api/slack/events"
     Export:
-      Name: !Sub "${AWS::StackName}-slack-url"
+      Name: !Sub "${AWS::StackName}-slack-events-url"
+
+  SlackCommandEndpoint:
+    Description: Slack Slash Command endpoint URL
+    Value: !Sub "https://${ZarathustraApi}.execute-api.${AWS::Region}.amazonaws.com/api/slack/command"
+    Export:
+      Name: !Sub "${AWS::StackName}-slack-command-url"

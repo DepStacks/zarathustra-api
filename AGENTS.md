@@ -83,10 +83,20 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
 
 ### Slack Integration
 - Handler: `handlers/slack_handler.py`
-- Endpoint: `POST /slack/events`
 - Auth: Slack Signing Secret (not API Key)
-- Events: `message`, `app_mention`
-- The handler extracts message text and publishes to SQS with Slack metadata
+
+**Endpoints:**
+- `POST /slack/command` - Slash commands (e.g., `/zara`)
+- `POST /slack/events` - Events API (app_mention, message)
+
+**Slash Command Payload (form-urlencoded):**
+- Parsed with `urllib.parse.parse_qs`
+- Key fields: `command`, `text`, `user_id`, `channel_id`, `response_url`
+- `response_url` is stored in SQS metadata for async responses
+
+**Events API Payload (JSON):**
+- `url_verification` for app setup
+- `event_callback` for messages
 
 ## Testing
 
